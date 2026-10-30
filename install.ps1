@@ -13,9 +13,11 @@ Set-Location $Root
 $Py = Join-Path $Root ".venv\Scripts\python.exe"
 
 function Get-ClaudeConfigDirs {
-    $dirs = @()
+    # Always register in the normal location (%APPDATA%\Claude) AND in any MSIX package location,
+    # because which one the app reads depends on how Claude Desktop was installed.
     $std = Join-Path $env:APPDATA "Claude"
-    if (Test-Path $std) { $dirs += $std }
+    New-Item -ItemType Directory -Force $std | Out-Null
+    $dirs = @($std)
     $pkgRoot = Join-Path $env:LOCALAPPDATA "Packages"
     if (Test-Path $pkgRoot) {
         Get-ChildItem $pkgRoot -Directory -Filter "Claude_*" -ErrorAction SilentlyContinue | ForEach-Object {
@@ -23,7 +25,6 @@ function Get-ClaudeConfigDirs {
             if (Test-Path $d) { $dirs += $d }
         }
     }
-    if ($dirs.Count -eq 0) { New-Item -ItemType Directory -Force $std | Out-Null; $dirs += $std }
     return $dirs
 }
 

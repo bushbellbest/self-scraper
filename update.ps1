@@ -45,7 +45,8 @@ function Register-Mcp {
             if (Test-Path $d) { $dirs += $d }
         }
     }
-    if ((Test-Path $std) -or $dirs.Count -eq 0) { $dirs += $std }
+    New-Item -ItemType Directory -Force $std | Out-Null
+    $dirs += $std
     foreach ($d in $dirs) {
         $out = & $Py (Join-Path $Dir "register_mcp.py") (Join-Path $d "claude_desktop_config.json") 2>&1
         Log ("mcp: " + ($out -join " "))
