@@ -1,0 +1,12 @@
+.venv/
+data/
+__pycache__/
+*.pyc
+*.bak
+_to_delete/
+live_test_result.json
+live_test_log.txt
+install.log
+kakao_test_log.txt
+update.log
+.version
