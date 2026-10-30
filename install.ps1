@@ -25,6 +25,11 @@ function Get-ClaudeConfigDirs {
             if (Test-Path $d) { $dirs += $d }
         }
     }
+    # Newer Claude Desktop builds keep their config in %LOCALAPPDATA%\Claude-Data\<package id>\
+    $dataRoot = Join-Path $env:LOCALAPPDATA "Claude-Data"
+    if (Test-Path $dataRoot) {
+        Get-ChildItem $dataRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $dirs += $_.FullName }
+    }
     return $dirs
 }
 

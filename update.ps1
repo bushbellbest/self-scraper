@@ -47,6 +47,10 @@ function Register-Mcp {
     }
     New-Item -ItemType Directory -Force $std | Out-Null
     $dirs += $std
+    $dataRoot = Join-Path $env:LOCALAPPDATA "Claude-Data"
+    if (Test-Path $dataRoot) {
+        Get-ChildItem $dataRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $dirs += $_.FullName }
+    }
     foreach ($d in $dirs) {
         $out = & $Py (Join-Path $Dir "register_mcp.py") (Join-Path $d "claude_desktop_config.json") 2>&1
         Log ("mcp: " + ($out -join " "))
