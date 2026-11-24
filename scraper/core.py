@@ -268,9 +268,15 @@ def _fallback_hint(url: str, reason: Optional[str]) -> str:
     if "reddit.com" in domain_key(url):
         if reason == "captcha":
             return "open_browser_for_human으로 직접 통과/로그인한 뒤 mode='browser'로 재시도. (Firecrawl은 레딧 미지원)"
+        if reason in {"forbidden", "login_wall"}:
+            return "레딧이 막힘(로그인 풀림 또는 차단). 다른 경로로 조용히 넘어가지 말고, 사용자에게 '수집기 전용 로그인 창을 열까요?'라고 먼저 요청할 것. 동의하면 open_browser_for_human('https://www.reddit.com/login', max_wait_s=300)으로 사용자가 직접 로그인하게 한 뒤 같은 요청을 재시도. 사용자가 자리에 없는 작업이면 창을 열지 말고 '로그인 필요'라고 보고. (Firecrawl은 레딧 미지원)"
         return "reddit_search / reddit_listing / reddit_post 도구를 쓰거나 open_browser_for_human으로 레딧 로그인 후 재시도. (Firecrawl은 레딧 미지원)"
     if reason == "captcha":
         return "open_browser_for_human(url)로 사람이 직접 확인을 통과한 뒤 mode='browser'로 재시도하거나, Firecrawl(firecrawl_scrape)로 넘길 것."
+    if reason in {"forbidden", "login_wall"}:
+        return ("로그인하면 풀릴 수 있는 차단. Firecrawl로 넘기기 전에 사용자에게 '수집기 전용 로그인 창을 열까요?'라고 먼저 요청하고, "
+                "동의하면 open_browser_for_human(로그인 주소, max_wait_s=300) 후 mode='browser'로 재시도. "
+                "사용자가 없거나 거절하면 Firecrawl(firecrawl_scrape)로 같은 URL을 수집.")
     if reason in {"not_found"}:
         return "주소가 맞는지 확인. 재시도 불필요."
     return "Firecrawl(firecrawl_scrape)로 같은 URL을 수집할 것."

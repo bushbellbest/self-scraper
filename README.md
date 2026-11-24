@@ -83,3 +83,4 @@ powershell -ep bypass -c "irm https://raw.githubusercontent.com/bushbellbest/sel
 - 네이버·카카오 내부 주소는 예고 없이 바뀜 → `capture_json`의 `observed_json_urls`로 새 패턴 확인
 - 레딧 화면 구조가 바뀌면 `scraper/reddit.py` 파서 수정 필요 (`tests/test_offline.py`, `live_test.bat`로 확인)
 - 2026-10 기준 old.reddit.com은 비로그인 시 로그인 화면으로 보내고, .json은 403이라 사용하지 않음
+- 2026-11 기준 레딧 검색 페이지와 댓글 조각(/svc/shreddit/comments)은 HTTP 단계에서 403이 자주 난다. 이때 브라우저 단계로 넘어가고, 첫 요청이 브라우저로만 열렸으면 다음 페이지도 브라우저로 가져온다. 브라우저 단계까지 403이면 수집기 전용 프로필에 레딧 로그인이 필요하다(`open_browser_for_human`). 로그인은 PC마다 따로 한다.

@@ -69,9 +69,13 @@ def to_www(url: str) -> str:
     return f"{WWW}{p.path or '/'}{q}"
 
 
-def get_html(url: str, fragment: bool = False, allow_browser: bool = True, wait_selector: Optional[str] = None) -> dict:
-    """HTTP 먼저, 막히면 브라우저. fragment=True면 조각 HTML이라 '빈 페이지' 판정을 하지 않는다."""
+def get_html(url: str, fragment: bool = False, allow_browser: bool = True, wait_selector: Optional[str] = None,
+             browser_only: bool = False) -> dict:
+    """HTTP 먼저, 막히면 브라우저. fragment=True면 조각 HTML이라 '빈 페이지' 판정을 하지 않는다.
+    browser_only=True면 HTTP를 건너뛴다(첫 요청에서 HTTP가 막혔을 때 이어지는 페이지용)."""
     attempts = []
+    if browser_only:
+        return _browser_step(url, fragment, wait_selector, attempts)
     core.throttle(url)
     t0 = time.monotonic()
     page, err = core.fetch_http(url, headers=HEADERS)
@@ -92,7 +96,10 @@ def get_html(url: str, fragment: bool = False, allow_browser: bool = True, wait_
         return {"ok": True, "page": page, "engine": "http", "attempts": attempts}
     if not allow_browser or reason == "not_found":
         return {"ok": False, "reason": reason, "attempts": attempts}
+    return _browser_step(url, fragment, wait_selector, attempts)
 
+
+def _browser_step(url: str, fragment: bool, wait_selector: Optional[str], attempts: list) -> dict:
     core.throttle(url)
     t0 = time.monotonic()
     page, err = core.fetch_browser(url, network_idle=False, wait_ms=2500, wait_selector=wait_selector)
@@ -116,8 +123,7 @@ def _fail(res: dict, url: str) -> dict:
         "url": url,
         "reason": res.get("reason"),
         "attempts": res.get("attempts"),
-        "fallback_hint": "잠시 후 재시도하거나, open_browser_for_human('https://www.reddit.com/login')으로 사용자가 본인 계정에 "
-                         "로그인한 뒤 재시도. 그래도 안 되면 사용자에게 직접 열어 붙여넣기를 요청. (Firecrawl은 레딧 미지원)",
+        "fallback_hint": "레딧이 막힘(로그인 풀림 또는 차단). 다른 경로로 조용히 넘어가지 말고, 사용자에게 '수집기 전용 로그인 창을 열까요?'라고 먼저 요청할 것. 동의하면 open_browser_for_human('https://www.reddit.com/login', max_wait_s=300)으로 사용자가 직접 로그인하게 한 뒤 같은 요청을 재시도. 사용자가 자리에 없는 작업이면 창을 열지 말고 '로그인 필요'라고 보고. (Firecrawl은 레딧 미지원)",
     }
 
 
@@ -256,9 +262,10 @@ def listing(subreddit: str, sort: str = "hot", time_filter: str = "week", limit:
     posts = parse_posts(res["page"])
     seen = {p["id"] for p in posts}
     nxt = next_partial(res["page"], "more-posts")
+    via_browser = res["engine"] == "browser"
     pages = 0
     while nxt and len(posts) < limit and pages < 6:
-        r = get_html(nxt, fragment=True, allow_browser=False)
+        r = get_html(nxt, fragment=True, allow_browser=False, browser_only=via_browser)
         attempts.extend(r["attempts"])
         if not r["ok"]:
             break
@@ -290,9 +297,10 @@ def search(query: str, subreddit: Optional[str] = None, sort: str = "relevance",
     posts = parse_search(res["page"])
     seen = {p["id"] for p in posts}
     nxt = next_partial(res["page"], "cursor=")
+    via_browser = res["engine"] == "browser"
     pages = 0
     while nxt and len(posts) < limit and pages < 6:
-        r = get_html(nxt, fragment=True, allow_browser=False)
+        r = get_html(nxt, fragment=True, allow_browser=False, browser_only=via_browser)
         attempts.extend(r["attempts"])
         if not r["ok"]:
             break
@@ -338,14 +346,15 @@ def post(url: str, sort: str = "top", comment_limit: int = 150, max_depth: int =
     flat: list[dict] = []
     if comment_limit:
         curl = f"{WWW}/svc/shreddit/comments/r/{sub}/t3_{pid}?sort={sort}"
-        rc = get_html(curl, fragment=True, allow_browser=False)
+        rc = get_html(curl, fragment=True, allow_browser=True)
+        via_browser = rc.get("engine") == "browser"
         attempts.extend(rc["attempts"])
         if rc["ok"]:
             flat = parse_comments(rc["page"])
             nxt = next_partial(rc["page"], "top-level=1")
             pages = 0
             while nxt and len(flat) < comment_limit and pages < 5:
-                rn = get_html(nxt, fragment=True, allow_browser=False)
+                rn = get_html(nxt, fragment=True, allow_browser=False, browser_only=via_browser)
                 attempts.extend(rn["attempts"])
                 if not rn["ok"]:
                     break
