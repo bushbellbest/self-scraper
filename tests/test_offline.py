@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scrapling.parser import Selector  # noqa: E402
 
-from scraper import core, maps, reddit  # noqa: E402
+from scraper import core, maps, reddit, results  # noqa: E402
 
 LISTING = """
 <shreddit-post permalink="/r/webscraping/comments/abc/hello/" content-href="https://example.com" comment-count="56"
@@ -118,6 +118,30 @@ def main():
     check(core.classify(200, "<p>access denied in a long article</p>", 20000) is None, "분류: 긴 정상글은 차단 아님")
     check(core.domain_key("https://m.place.naver.com/a") == "naver.com", "도메인 키")
     check(core.domain_key("https://www.example.co.kr/") == "example.co.kr", "도메인 키 co.kr")
+
+    # 큰 결과 → 파일 저장 + 요약본
+    import tempfile
+    results.RESULT_DIR = Path(tempfile.mkdtemp())
+    small = {"ok": True, "title": "짧은 결과"}
+    check(results.wrap("t", small) is small, "results: 작은 결과는 그대로")
+    big = {"ok": True, "url": "https://www.reddit.com/r/a/comments/x/", "title": "긴 글", "body": "본문 " * 3000,
+           "comment_tree": [{"author": f"u{i}", "score": i, "body": f"댓글{i} " + "내용 " * 200,
+                             "replies": [{"author": "r", "body": "답글 " * 100 + ("숨은단어" if i == 120 else "")}]}
+                            for i in range(150)],
+           "attempts": [{"engine": "http"}] * 20}
+    out = results.wrap("reddit_post", big)
+    rid = out.get("saved", {}).get("id", "")
+    check(len(results._dumps(out)) <= results.INLINE_MAX + 400, "results: 요약본 크기 제한")
+    check(bool(rid) and (results.RESULT_DIR / f"{rid}.json").exists(), "results: 전체 파일 저장")
+    check("attempts" not in out and out["title"] == "긴 글", "results: 요약본 핵심 유지·진단정보 제거")
+    hit = results.read_saved(rid, query="숨은단어")
+    check(hit["matches"] == 1 and hit["hits"][0]["path"].startswith("comment_tree.120"), "results: 검색")
+    part = results.read_saved(rid, path="comment_tree.120.author")
+    check(part["text"] == "u120", "results: 위치로 읽기")
+    body = results.read_saved(rid, path="body", max_chars=1000)
+    check(len(body["text"]) == 1000 and body["next_offset"] == 1000, "results: 이어 읽기")
+    check("outline" in results.read_saved(rid), "results: 구조 보기")
+    check(results.read_saved("../x")["reason"] == "not_found", "results: 잘못된 id 차단")
 
     print("\n결과:", "실패 있음" if check.failed else "모두 통과")
     sys.exit(1 if check.failed else 0)

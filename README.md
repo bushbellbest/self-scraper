@@ -31,7 +31,12 @@
 | `naver_search` / `naver_place` / `naver_place_raw` | 네이버 플레이스 목록·상세(리뷰 수, 영업시간) — HTTP만 사용 |
 | `kakao_search` / `kakao_place` | 카카오맵 검색(별점·리뷰 수·전화·주소) — 브라우저 사용. 상세(kakao_place)는 현재 빈 화면이 와서 실패 시 Firecrawl로 넘김 |
 | `open_browser_for_human` | 캡차·로그인을 사람이 직접 처리 |
+| `read_saved` | 큰 결과에서 필요한 부분만 읽기 (위치 지정·단어 검색·이어 읽기) |
 | `scraper_status` | 도메인별 성공/실패 통계 |
+
+### 큰 결과 처리 (토큰 절약, 0.2.0부터)
+
+결과가 6,000자를 넘으면 전체를 `data/results/<id>.json`에 저장하고, Claude에게는 요약본(긴 글은 앞부분, 긴 목록은 앞 몇 개)과 `saved.id`만 보낸다. Claude는 필요할 때만 `read_saved`로 해당 부분을 읽는다. 예: 레딧 댓글 150개(약 16만 자) → 요약본 약 5천 자. 저장 파일은 최근 300개만 남긴다.
 
 ## 설치 (Windows)
 
@@ -75,6 +80,8 @@ powershell -ep bypass -c "irm https://raw.githubusercontent.com/bushbellbest/sel
 | `SCRAPER_SAVE_DATA` | `1` | 브라우저 단계에서 이미지·폰트·영상 차단 |
 | `SCRAPER_REAL_CHROME` | `auto` | 설치된 크롬 사용 여부 |
 | `SCRAPER_DATA_DIR` | `./data` | 프로필·로그 저장 위치 |
+| `SCRAPER_INLINE_MAX` | `6000` | 이 글자 수를 넘는 결과는 저장 후 요약본만 전달 |
+| `SCRAPER_KEEP_RESULTS` | `300` | 저장 결과 파일 보관 개수 |
 
 ## 알려진 한계
 
