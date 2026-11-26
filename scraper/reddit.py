@@ -72,9 +72,10 @@ def to_www(url: str) -> str:
 def get_html(url: str, fragment: bool = False, allow_browser: bool = True, wait_selector: Optional[str] = None,
              browser_only: bool = False) -> dict:
     """HTTP 먼저, 막히면 브라우저. fragment=True면 조각 HTML이라 '빈 페이지' 판정을 하지 않는다.
-    browser_only=True면 HTTP를 건너뛴다(첫 요청에서 HTTP가 막혔을 때 이어지는 페이지용)."""
+    browser_only=True면 HTTP를 건너뛴다(첫 요청에서 HTTP가 막혔을 때 이어지는 페이지용).
+    레딧이 HTTP를 계속 막는 동안(core.skip_http)에는 처음부터 브라우저를 쓴다."""
     attempts = []
-    if browser_only:
+    if browser_only or (allow_browser and core.skip_http(url)):
         return _browser_step(url, fragment, wait_selector, attempts)
     core.throttle(url)
     t0 = time.monotonic()
@@ -89,14 +90,19 @@ def get_html(url: str, fragment: bool = False, allow_browser: bool = True, wait_
         reason = core.classify(page.status, str(page.html_content), tl)
         if fragment and reason == "empty":
             reason = None
+    will_retry = page is None or reason is not None
+    will_retry = will_retry and allow_browser and reason != "not_found"
     attempts.append({"engine": "http", "status": getattr(page, "status", None), "reason": reason or "ok", "error": err})
     core.log_event(url=url, engine="reddit_http", status=getattr(page, "status", None), reason=reason or "ok",
-                   secs=round(time.monotonic() - t0, 2))
+                   secs=round(time.monotonic() - t0, 2), final=not will_retry)
     if page is not None and reason is None:
         return {"ok": True, "page": page, "engine": "http", "attempts": attempts}
-    if not allow_browser or reason == "not_found":
+    if not will_retry:
         return {"ok": False, "reason": reason, "attempts": attempts}
-    return _browser_step(url, fragment, wait_selector, attempts)
+    res = _browser_step(url, fragment, wait_selector, attempts)
+    if res["ok"] and reason in {"forbidden", "empty", "blocked", "captcha"}:
+        core.mark_http_blocked(url)
+    return res
 
 
 def _browser_step(url: str, fragment: bool, wait_selector: Optional[str], attempts: list) -> dict:
@@ -111,7 +117,7 @@ def _browser_step(url: str, fragment: bool, wait_selector: Optional[str], attemp
         reason = core.classify(page.status, str(page.html_content), max(core.visible_text_len(page), core.MIN_TEXT_CHARS))
     attempts.append({"engine": "browser", "status": getattr(page, "status", None), "reason": reason or "ok", "error": err})
     core.log_event(url=url, engine="reddit_browser", status=getattr(page, "status", None), reason=reason or "ok",
-                   secs=round(time.monotonic() - t0, 2))
+                   secs=round(time.monotonic() - t0, 2), final=True)
     if page is not None and reason is None:
         return {"ok": True, "page": page, "engine": "browser", "attempts": attempts}
     return {"ok": False, "reason": reason, "attempts": attempts}
@@ -330,15 +336,14 @@ def post(url: str, sort: str = "top", comment_limit: int = 150, max_depth: int =
     # 1) 글 본문: HTTP 페이지에 <shreddit-post>가 있으면 사용, 없으면 브라우저로 렌더링
     post_url = f"{WWW}/r/{sub}/comments/{pid}/"
     info: dict[str, Any] = {}
-    r = get_html(post_url, allow_browser=False)
+    r = get_html(post_url, wait_selector="shreddit-post")
     attempts.extend(r["attempts"])
     posts = parse_posts(r["page"], body_max=20_000) if r["ok"] else []
-    if not posts:
-        rb = core.fetch_browser(post_url, network_idle=False, wait_ms=2500, wait_selector="shreddit-post")
-        page_b, err_b = rb
-        attempts.append({"engine": "browser", "status": getattr(page_b, "status", None), "error": err_b})
-        if page_b is not None:
-            posts = parse_posts(page_b, body_max=20_000)
+    if not posts and r.get("engine") == "http":
+        # HTTP 화면에 글 요소가 없으면 브라우저로 다시 그린다
+        rb = _browser_step(post_url, False, "shreddit-post", attempts)
+        if rb["ok"]:
+            posts = parse_posts(rb["page"], body_max=20_000)
     if posts:
         info = posts[0]
         # 글 페이지에서는 본문이 shreddit-post 안의 다른 슬롯에 있을 수 있음

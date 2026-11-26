@@ -63,6 +63,11 @@ BLOCK_MARKERS = (
     "whoa there, pardner",
 )
 
+# HTTP 단계가 계속 막히는 사이트는 한동안 HTTP를 건너뛰고 바로 브라우저로 간다(시간·요청 낭비 방지).
+SKIP_HTTP_HOURS = float(os.environ.get("SCRAPER_SKIP_HTTP_HOURS", "6"))
+STATE_FILE = DATA_DIR / "domain_state.json"
+_state_lock = threading.Lock()
+
 _throttle_lock = threading.Lock()
 _next_allowed: dict[str, float] = {}
 # 브라우저 프로필은 동시에 하나만 열 수 있으므로 잠금
@@ -100,6 +105,32 @@ def log_event(**fields: Any) -> None:
             f.write(json.dumps(fields, ensure_ascii=False) + "\n")
     except OSError:
         pass
+
+
+def _load_state() -> dict:
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def skip_http(url: str) -> bool:
+    """이 도메인이 최근 HTTP 단계에서 막히고 브라우저로는 성공했으면 True."""
+    until = (_load_state().get("skip_http") or {}).get(domain_key(url), 0)
+    return time.time() < float(until or 0)
+
+
+def mark_http_blocked(url: str) -> None:
+    """HTTP는 막혔는데 브라우저는 성공한 경우 호출. SKIP_HTTP_HOURS 동안 HTTP를 건너뛴다."""
+    if SKIP_HTTP_HOURS <= 0:
+        return
+    with _state_lock:
+        st = _load_state()
+        st.setdefault("skip_http", {})[domain_key(url)] = time.time() + SKIP_HTTP_HOURS * 3600
+        try:
+            STATE_FILE.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
 
 
 def find_chrome() -> Optional[str]:
@@ -298,18 +329,12 @@ def _result(url: str, page: Any, engine: str, css_selector, main_content_only, m
     }
 
 
-def fetch_auto(
-    url: str,
-    mode: str = "auto",
-    css_selector: Optional[str] = None,
-    main_content_only: bool = True,
-    max_chars: int = 20_000,
-    wait_selector: Optional[str] = None,
-) -> dict:
-    """mode: auto(HTTP→브라우저) | http | browser"""
+def fetch_page_obj(url: str, mode: str = "auto", wait_selector: Optional[str] = None) -> dict:
+    """페이지 객체를 가져온다. 성공: {ok, page, engine, attempts}, 실패: {ok:False, reason, attempts, fallback_hint}.
+    mode: auto(HTTP→브라우저, 단 HTTP가 계속 막히는 사이트는 바로 브라우저) | http | browser"""
     attempts: list[dict] = []
-
-    if mode in {"auto", "http"}:
+    http_failed = False
+    if mode == "http" or (mode == "auto" and not skip_http(url)):
         throttle(url)
         t0 = time.monotonic()
         page, err = fetch_http(url)
@@ -319,15 +344,15 @@ def fetch_auto(
             reason = "network_error"
         attempts.append({"engine": "http", "status": getattr(page, "status", None), "reason": reason or "ok", "error": err})
         log_event(url=url, engine="http", status=getattr(page, "status", None), reason=reason or "ok",
-                  secs=round(time.monotonic() - t0, 2))
+                  secs=round(time.monotonic() - t0, 2), final=(reason is None or mode == "http"
+                                                              or reason in {"not_found", "rate_limited"}))
         if page is not None and reason is None:
-            res = _result(url, page, "http", css_selector, main_content_only, max_chars)
-            res["attempts"] = attempts
-            return res
+            return {"ok": True, "page": page, "engine": "http", "attempts": attempts}
         # 404·속도제한이면 브라우저로 넘겨도 의미 없음
         if mode == "http" or reason in {"not_found", "rate_limited"}:
             return {"ok": False, "url": url, "reason": reason, "attempts": attempts,
                     "fallback_hint": _fallback_hint(url, reason)}
+        http_failed = reason in {"forbidden", "empty", "blocked", "captcha"}
 
     throttle(url)
     t0 = time.monotonic()
@@ -338,13 +363,51 @@ def fetch_auto(
         reason = "browser_error"
     attempts.append({"engine": "browser", "status": getattr(page, "status", None), "reason": reason or "ok", "error": err})
     log_event(url=url, engine="browser", status=getattr(page, "status", None), reason=reason or "ok",
-              secs=round(time.monotonic() - t0, 2))
+              secs=round(time.monotonic() - t0, 2), final=True)
     if page is not None and reason is None:
-        res = _result(url, page, "browser", css_selector, main_content_only, max_chars)
-        res["attempts"] = attempts
-        return res
+        if http_failed:
+            mark_http_blocked(url)
+        return {"ok": True, "page": page, "engine": "browser", "attempts": attempts}
     return {"ok": False, "url": url, "reason": reason, "attempts": attempts,
             "fallback_hint": _fallback_hint(url, reason)}
+
+
+def fetch_auto(
+    url: str,
+    mode: str = "auto",
+    css_selector: Optional[str] = None,
+    main_content_only: bool = True,
+    max_chars: int = 20_000,
+    wait_selector: Optional[str] = None,
+) -> dict:
+    """mode: auto(HTTP→브라우저) | http | browser"""
+    r = fetch_page_obj(url, mode, wait_selector)
+    if not r["ok"]:
+        return r
+    res = _result(url, r["page"], r["engine"], css_selector, main_content_only, max_chars)
+    res["attempts"] = r["attempts"]
+    return res
+
+
+def page_links(page: Any) -> list[str]:
+    """페이지 안의 링크(절대 주소, #조각 제거, 중복 제거)."""
+    from urllib.parse import urljoin, urldefrag
+
+    base = str(getattr(page, "url", "") or "")
+    out, seen = [], set()
+    try:
+        hrefs = page.css("a::attr(href)").getall()
+    except Exception:
+        hrefs = []
+    for h in hrefs:
+        h = str(h or "").strip()
+        if not h or h.startswith(("javascript:", "mailto:", "tel:", "#")):
+            continue
+        u = urldefrag(urljoin(base, h))[0]
+        if u.startswith("http") and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
 
 
 # ---------------------------------------------------------------- 네트워크 JSON 캡처
@@ -483,25 +546,52 @@ def open_browser_for_human(url: str, max_wait_s: int = 90) -> dict:
 # ---------------------------------------------------------------- 통계
 
 def recent_stats(last_n: int = 300) -> dict:
+    """요청 단위 최종 결과로 집계한다.
+    HTTP 단계가 막혔어도 같은 주소가 곧이어(3분 안) 브라우저로 성공했으면 '성공'으로 센다.
+    first_try_blocked = 첫 시도(HTTP)가 막힌 횟수(참고용)."""
     if not LOG_FILE.exists():
         return {"total": 0, "by_domain": {}}
     lines = LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-last_n:]
-    by: dict[str, dict[str, int]] = {}
+    evs = []
     for ln in lines:
         try:
             ev = json.loads(ln)
+            ev["_t"] = datetime.fromisoformat(ev.get("ts")).timestamp() if ev.get("ts") else 0
+            evs.append(ev)
         except Exception:
             continue
+    by: dict[str, dict[str, int]] = {}
+    for i, ev in enumerate(evs):
         d = by.setdefault(domain_key(ev.get("url", "")), {"ok": 0, "fail": 0})
-        if ev.get("reason") in {"ok", "cleared"}:
+        reason = ev.get("reason")
+        if reason in {"ok", "cleared"}:
             d["ok"] += 1
-        else:
-            d["fail"] += 1
-            d[ev.get("reason", "unknown")] = d.get(ev.get("reason", "unknown"), 0) + 1
+            continue
+        # 뒤따르는 다른 단계가 같은 주소를 성공시켰는가?
+        recovered = False
+        if ev.get("final") is not True:
+            for nxt in evs[i + 1:i + 6]:
+                if nxt.get("url") == ev.get("url") and nxt["_t"] - ev["_t"] <= 180:
+                    if nxt.get("reason") in {"ok", "cleared"}:
+                        recovered = True
+                    break
+        if recovered:
+            d["first_try_blocked"] = d.get("first_try_blocked", 0) + 1
+            continue
+        if ev.get("final") is False:
+            # 다음 단계로 넘어갔지만 기록이 없는 경우(옛 기록). 실패로 센다.
+            pass
+        d["fail"] += 1
+        d[reason or "unknown"] = d.get(reason or "unknown", 0) + 1
+    st = _load_state().get("skip_http") or {}
+    now = time.time()
     return {
-        "total": len(lines),
+        "total_log_lines": len(lines),
         "by_domain": dict(sorted(by.items(), key=lambda kv: -kv[1]["fail"])),
+        "skip_http_now": {k: round((v - now) / 3600, 1) for k, v in st.items() if v > now},
         "real_chrome": use_real_chrome(),
         "save_data": SAVE_DATA,
         "log_file": str(LOG_FILE),
+        "note": "ok/fail은 요청의 최종 결과. first_try_blocked는 첫 시도(HTTP)만 막히고 브라우저로 성공한 횟수. "
+                "skip_http_now는 HTTP를 건너뛰고 바로 브라우저를 쓰는 도메인(남은 시간)."
     }

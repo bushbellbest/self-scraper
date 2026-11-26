@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scrapling.parser import Selector  # noqa: E402
 
-from scraper import core, maps, reddit, results  # noqa: E402
+from scraper import core, maps, reddit, results, search  # noqa: E402
 
 LISTING = """
 <shreddit-post permalink="/r/webscraping/comments/abc/hello/" content-href="https://example.com" comment-count="56"
@@ -142,6 +142,17 @@ def main():
     check(len(body["text"]) == 1000 and body["next_offset"] == 1000, "results: 이어 읽기")
     check("outline" in results.read_saved(rid), "results: 구조 보기")
     check(results.read_saved("../x")["reason"] == "not_found", "results: 잘못된 id 차단")
+
+    # 웹 검색 파서 (2026-11-26 실제 DuckDuckGo Lite / Bing 구조)
+    ddg = """<tr><td valign="top">1.&nbsp;</td><td><a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa&amp;rut=x" class='result-link'>Example &amp; A</a></td></tr>
+<tr><td>&nbsp;</td><td class='result-snippet'>Snippet <b>text</b></td></tr>
+<tr class="result-sponsored"><td valign="top">2.&nbsp;</td><td><a rel="nofollow" href="https://duckduckgo.com/y.js?ad=1" class='result-link'>AD</a></td></tr>"""
+    got = search._parse_ddg_lite(ddg)
+    check(len(got) == 1 and got[0]["url"] == "https://example.com/a" and got[0]["title"] == "Example & A"
+          and got[0]["snippet"] == "Snippet text", "검색: DuckDuckGo 결과·광고 제외")
+    bing = '<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&amp;&amp;p=x&amp;u=a1aHR0cHM6Ly93d3cubmF2ZXIuY29tLw&amp;ntb=1">NAVER</a></h2><p class="b_lineclamp2">desc</p></li>'
+    got = search._parse_bing(bing)
+    check(got and got[0]["url"] == "https://www.naver.com/" and got[0]["snippet"] == "desc", "검색: Bing 주소 복원")
 
     print("\n결과:", "실패 있음" if check.failed else "모두 통과")
     sys.exit(1 if check.failed else 0)

@@ -20,6 +20,8 @@
 - 엔진: [Scrapling](https://github.com/D4Vinci/Scrapling) 0.5 (BSD-3)
 - 도메인별 요청 간격 자동 적용 (레딧 3~6초, 네이버·카카오 1.5~3초, 기타 1~2.5초)
 - 캡차 자동 풀이 기능은 넣지 않았다
+- HTTP가 막히고 브라우저로는 되는 사이트(예: 레딧)는 6시간 동안 HTTP를 건너뛰고 바로 브라우저를 쓴다(`data/domain_state.json`, 0.3.0부터)
+- `scraper_status`는 요청의 최종 결과로 센다. 첫 시도만 막히고 브라우저로 성공한 것은 `first_try_blocked`로 따로 표시
 
 ## 도구
 
@@ -30,6 +32,10 @@
 | `reddit_search` / `reddit_listing` / `reddit_post` | 레딧 검색·목록·본문+댓글 트리 (www.reddit.com 화면 파싱, 로그인 불필요) |
 | `naver_search` / `naver_place` / `naver_place_raw` | 네이버 플레이스 목록·상세(리뷰 수, 영업시간) — HTTP만 사용 |
 | `kakao_search` / `kakao_place` | 카카오맵 검색(별점·리뷰 수·전화·주소) — 브라우저 사용. 상세(kakao_place)는 현재 빈 화면이 와서 실패 시 Firecrawl로 넘김 |
+| `web_search` | 웹 검색(DuckDuckGo → Bing). `fetch_top`으로 상위 결과 본문까지 — Firecrawl 검색 대체 |
+| `fetch_many` | 여러 주소(최대 30개) 한 번에 수집 |
+| `map_site` | 사이트 주소 목록(sitemap + 첫 페이지 링크) |
+| `crawl_site` | 링크를 따라가며 여러 페이지 수집(최대 50) |
 | `open_browser_for_human` | 캡차·로그인을 사람이 직접 처리 |
 | `read_saved` | 큰 결과에서 필요한 부분만 읽기 (위치 지정·단어 검색·이어 읽기) |
 | `scraper_status` | 도메인별 성공/실패 통계 |

@@ -14,10 +14,12 @@ logging.getLogger("trafilatura").setLevel(logging.ERROR)
 import anyio  # noqa: E402
 from mcp.server import MCPServer  # noqa: E402
 
-from scraper import core, maps, reddit, results  # noqa: E402
+from scraper import core, maps, reddit, results, search  # noqa: E402
 
 INSTRUCTIONS = """내 PC에서 직접 수집하는 무료 수집기. 크레딧이 들지 않으므로 웹 페이지 수집은 이 도구를 먼저 쓴다.
 규칙:
+0. Firecrawl이 하던 일은 이 도구로 먼저 한다: 웹 검색=web_search(firecrawl_search 대신), 여러 주소=fetch_many,
+   사이트 주소 목록=map_site, 사이트 여러 페이지=crawl_site. 이 도구가 ok=false를 돌려줄 때만 Firecrawl을 쓴다.
 1. 일반 페이지는 fetch_page를 먼저 쓴다. ok=false이면 fallback_hint를 따른다(대개 Firecrawl의 firecrawl_scrape로 넘김).
 2. 레딧은 reddit_search / reddit_listing / reddit_post를 쓴다. Firecrawl은 레딧을 지원하지 않으므로 레딧 실패 시 Firecrawl로 넘기지 않는다.
 3. 네이버 지도는 naver_search → naver_place(영업시간·리뷰 수), 카카오맵은 kakao_search(별점·리뷰 수) → kakao_place(상세 본문). 구조를 모르는 사이트의 내부 데이터는 capture_json.
@@ -25,7 +27,7 @@ INSTRUCTIONS = """내 PC에서 직접 수집하는 무료 수집기. 크레딧�
 5. 같은 사이트를 짧은 시간에 대량으로 요청하지 않는다(수집기가 도메인별 간격을 자동으로 둔다).
 6. 결과가 크면 전체는 PC에 저장되고 요약본과 saved.id만 온다. 요약으로 답할 수 있으면 그대로 쓰고, 잘린 부분이 꼭 필요할 때만 read_saved로 그 부분만 읽는다(path 지정 또는 query 검색). 전체를 통째로 다시 읽지 않는다."""
 
-mcp = MCPServer(name="self-scraper", instructions=INSTRUCTIONS, version="0.2.0")
+mcp = MCPServer(name="self-scraper", instructions=INSTRUCTIONS, version="0.3.0")
 
 
 async def _run(fn, *args, **kwargs):
@@ -50,6 +52,49 @@ async def fetch_page(
     """웹 페이지를 마크다운으로 수집. mode: auto(HTTP→실패 시 스텔스 브라우저) | http | browser.
     css_selector를 주면 그 부분만 추출. 실패하면 reason과 fallback_hint를 돌려준다."""
     return await _run_big("fetch_page", core.fetch_auto, url, mode, css_selector, main_content_only, max_chars, wait_selector)
+
+
+@mcp.tool()
+async def web_search(
+    query: str,
+    limit: int = 10,
+    site: Optional[str] = None,
+    time_filter: Optional[str] = None,
+    fetch_top: int = 0,
+    max_chars_each: int = 5000,
+) -> dict:
+    """웹 검색(무료, Firecrawl의 firecrawl_search 대신 먼저 사용). DuckDuckGo → 안 되면 Bing.
+    site: 특정 사이트만(예: 'tistory.com'). time_filter: day|week|month|year.
+    fetch_top: 상위 N개(최대 10) 결과의 본문까지 수집. 결과: title, url, snippet(+content)."""
+    return await _run_big("web_search", search.web_search, query, limit, site, time_filter, "kr-kr", fetch_top, max_chars_each)
+
+
+@mcp.tool()
+async def fetch_many(urls: list[str], max_chars_each: int = 6000, main_content_only: bool = True) -> dict:
+    """여러 주소(최대 30개)를 한 번에 마크다운으로 수집. 실패한 주소는 failed에 이유와 fallback_hint."""
+    return await _run_big("fetch_many", search.fetch_many, urls, max_chars_each, main_content_only)
+
+
+@mcp.tool()
+async def map_site(url: str, limit: int = 200, search_word: Optional[str] = None) -> dict:
+    """사이트의 페이지 주소 목록(sitemap + 첫 페이지 링크). search_word를 주면 주소에 그 단어가 든 것만."""
+    return await _run_big("map_site", search.map_site, url, limit, search_word)
+
+
+@mcp.tool()
+async def crawl_site(
+    url: str,
+    max_pages: int = 15,
+    same_path_only: bool = True,
+    include: Optional[str] = None,
+    exclude: Optional[str] = None,
+    max_chars_each: int = 6000,
+    max_depth: int = 2,
+) -> dict:
+    """시작 주소에서 같은 사이트 링크를 따라가며 여러 페이지(최대 50)를 수집.
+    same_path_only=True면 시작 주소 경로 아래만. include/exclude: 주소에 포함/제외할 단어."""
+    return await _run_big("crawl_site", search.crawl_site, url, max_pages, same_path_only, include, exclude,
+                          max_chars_each, max_depth)
 
 
 @mcp.tool()
